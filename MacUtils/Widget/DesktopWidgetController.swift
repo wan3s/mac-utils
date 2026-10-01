@@ -2,7 +2,16 @@ import AppKit
 import SwiftUI
 
 /// Borderless panel that sits on the desktop: above the wallpaper and icons, below app windows.
+///
+/// Dragging is handled here rather than in a view: the panel never becomes key and the app is
+/// usually inactive, so views may not get the first click, but the window always sees its events.
 private final class DesktopWidgetPanel: NSPanel {
+    var isDraggable = false
+    /// Called after a drag that actually moved the panel.
+    var onDragEnded: (() -> Void)?
+
+    private var dragStart: (mouse: NSPoint, origin: NSPoint)?
+
     init() {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
@@ -17,12 +26,40 @@ private final class DesktopWidgetPanel: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        // Control-click opens the context menu, so leave it alone.
+        guard isDraggable, !event.modifierFlags.contains(.control) else {
+            dragStart = nil
+            super.sendEvent(event)
+            return
+        }
+        switch event.type {
+        case .leftMouseDown:
+            dragStart = (screenLocation(of: event), frame.origin)
+            NSCursor.closedHand.push()
+        case .leftMouseDragged:
+            guard let start = dragStart else { return super.sendEvent(event) }
+            let mouse = screenLocation(of: event)
+            setFrameOrigin(NSPoint(x: start.origin.x + mouse.x - start.mouse.x,
+                                   y: start.origin.y + mouse.y - start.mouse.y))
+        case .leftMouseUp:
+            guard let start = dragStart else { return super.sendEvent(event) }
+            dragStart = nil
+            NSCursor.pop()
+            if frame.origin != start.origin { onDragEnded?() }
+        default:
+            super.sendEvent(event)
+        }
+    }
+
+    private func screenLocation(of event: NSEvent) -> NSPoint {
+        convertPoint(toScreen: event.locationInWindow)
+    }
 }
 
-/// Hosting view that starts a window drag on mouse down when dragging is allowed.
-private final class DraggableHostingView<Content: View>: NSHostingView<Content> {
-    var isDraggable = false
-    var onDragEnded: (() -> Void)?
+/// Hosting view that reports changes of its SwiftUI content's ideal size.
+private final class SizeReportingHostingView<Content: View>: NSHostingView<Content> {
     var onSizeChange: ((CGSize) -> Void)?
 
     override func invalidateIntrinsicContentSize() {
@@ -33,16 +70,6 @@ private final class DraggableHostingView<Content: View>: NSHostingView<Content> 
             self.onSizeChange?(self.fittingSize)
         }
     }
-
-    override func mouseDown(with event: NSEvent) {
-        if isDraggable, let window {
-            // Runs its own tracking loop and returns once the mouse is released.
-            window.performDrag(with: event)
-            onDragEnded?()
-        } else {
-            super.mouseDown(with: event)
-        }
-    }
 }
 
 /// Shows the system monitor widget and keeps its position, look and sampling in sync with settings.
@@ -51,7 +78,7 @@ final class DesktopWidgetController: NSObject {
     private static let screenMargin: CGFloat = 20
 
     private let panel = DesktopWidgetPanel()
-    private let hostingView: DraggableHostingView<DesktopWidgetView>
+    private let hostingView: SizeReportingHostingView<DesktopWidgetView>
     private let monitor: SystemMonitor
     private let settings: AppSettings
     private var contentSize: CGSize = .zero
@@ -60,13 +87,13 @@ final class DesktopWidgetController: NSObject {
     init(monitor: SystemMonitor, settings: AppSettings, actions: AppActions) {
         self.monitor = monitor
         self.settings = settings
-        hostingView = DraggableHostingView(rootView: DesktopWidgetView(monitor: monitor, settings: settings, actions: actions))
+        hostingView = SizeReportingHostingView(rootView: DesktopWidgetView(monitor: monitor, settings: settings, actions: actions))
         super.init()
 
         hostingView.sizingOptions = [.intrinsicContentSize]
         panel.contentView = hostingView
         contentSize = hostingView.fittingSize
-        hostingView.onDragEnded = { [weak self] in self?.dragEnded() }
+        panel.onDragEnded = { [weak self] in self?.dragEnded() }
         hostingView.onSizeChange = { [weak self] size in self?.contentSizeChanged(size) }
 
         NotificationCenter.default.addObserver(
@@ -106,8 +133,7 @@ final class DesktopWidgetController: NSObject {
     private func applyPosition() {
         let placement = settings.widgetPlacement
         let screenID = settings.widgetScreenID
-        let locked = settings.widgetLocked
-        hostingView.isDraggable = placement == .free && !locked
+        panel.isDraggable = !settings.widgetLocked
         let screen = Self.screen(for: screenID)
         let screenChanged = appliedScreenID != nil && appliedScreenID != screenID
         appliedScreenID = screenID
@@ -146,13 +172,24 @@ final class DesktopWidgetController: NSObject {
     // MARK: Window → settings
 
     private func dragEnded() {
-        guard settings.widgetPlacement == .free else { return }
-        // Remember where it was dropped, and which display it's on now.
-        if let id = panel.screen?.displayID, id != Self.screen(for: settings.widgetScreenID).displayID {
+        // Keep the whole widget reachable on the display it was dropped on.
+        let screen = panel.screen ?? Self.screen(for: settings.widgetScreenID)
+        let topLeft = Self.clamp(panel.frame, to: screen.visibleFrame)
+        if topLeft != CGPoint(x: panel.frame.minX, y: panel.frame.maxY) {
+            setFrame(topLeft: topLeft)
+        }
+        // Remember where it was dropped, and which display it's on now. Saving the position
+        // before switching placement means the observers see the final state in one pass.
+        settings.widgetTopLeft = topLeft
+        let id = screen.displayID
+        if id != Self.screen(for: settings.widgetScreenID).displayID {
             appliedScreenID = id
             settings.widgetScreenID = id
         }
-        settings.widgetTopLeft = CGPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        // Dragging a corner-pinned widget means people want to place it themselves.
+        if settings.widgetPlacement != .free {
+            settings.widgetPlacement = .free
+        }
     }
 
     @objc private func screensChanged(_ notification: Notification) {
@@ -163,6 +200,12 @@ final class DesktopWidgetController: NSObject {
 
     static func screen(for id: UInt32) -> NSScreen {
         NSScreen.screens.first { $0.displayID == id } ?? NSScreen.screens.first ?? NSScreen.main!
+    }
+
+    private static func clamp(_ frame: NSRect, to area: NSRect) -> CGPoint {
+        let x = min(max(frame.minX, area.minX), max(area.maxX - frame.width, area.minX))
+        let maxY = max(min(frame.maxY, area.maxY), min(area.minY + frame.height, area.maxY))
+        return CGPoint(x: x, y: maxY)
     }
 
     private static func isOnScreen(_ topLeft: CGPoint) -> Bool {
@@ -183,6 +226,33 @@ final class DesktopWidgetController: NSObject {
         }
     }
 }
+
+#if DEBUG
+extension DesktopWidgetController {
+    /// Feeds a synthetic left-button drag through the panel's event handling.
+    func simulateDrag(by offset: CGVector) {
+        func send(_ type: NSEvent.EventType, _ location: NSPoint) {
+            guard let event = NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ) else { return }
+            panel.sendEvent(event)
+        }
+        let grab = NSPoint(x: 20, y: 20)
+        let screenGrab = NSPoint(x: panel.frame.minX + grab.x, y: panel.frame.minY + grab.y)
+        send(.leftMouseDown, grab)
+        var location = grab
+        for step in 1...5 {
+            let fraction = CGFloat(step) / 5
+            // Like real events, each location is relative to where the panel is at that moment.
+            location = NSPoint(x: screenGrab.x + offset.dx * fraction - panel.frame.minX,
+                               y: screenGrab.y + offset.dy * fraction - panel.frame.minY)
+            send(.leftMouseDragged, location)
+        }
+        send(.leftMouseUp, location)
+    }
+}
+#endif
 
 extension NSScreen {
     var displayID: UInt32 {

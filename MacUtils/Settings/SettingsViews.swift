@@ -170,7 +170,7 @@ struct WidgetSettingsView: View {
 
             Section {
                 Picker("Position", selection: $settings.widgetPlacement) {
-                    Text("Anywhere (drag to move)").tag(WidgetPlacement.free)
+                    Text("Anywhere").tag(WidgetPlacement.free)
                     Divider()
                     Text("Top Left").tag(WidgetPlacement.topLeft)
                     Text("Top Right").tag(WidgetPlacement.topRight)
@@ -184,7 +184,6 @@ struct WidgetSettingsView: View {
                     }
                 }
                 Toggle("Lock position", isOn: $settings.widgetLocked)
-                    .disabled(settings.widgetPlacement != .free)
                 HStack {
                     Spacer()
                     Button("Reset Position") {
@@ -196,7 +195,7 @@ struct WidgetSettingsView: View {
             } header: {
                 Text("Position")
             } footer: {
-                Text("The widget stays on the desktop, below app windows, on every Space.")
+                Text("Drag the widget with the pointer to move it; it then stays where you drop it. Lock the position to prevent accidental moves. The widget lives on the desktop, below app windows, on every Space.")
                     .foregroundStyle(.secondary)
             }
         }

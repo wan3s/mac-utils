@@ -116,7 +116,7 @@
 "Dark" = "Тёмное";
 "Background opacity" = "Непрозрачность фона";
 "Position" = "Положение";
-"Anywhere (drag to move)" = "Где угодно (перетаскиванием)";
+"Anywhere" = "Где угодно";
 "Top Left" = "Вверху слева";
 "Top Right" = "Вверху справа";
 "Bottom Left" = "Внизу слева";
@@ -125,5 +125,5 @@
 "Main display" = "Основной монитор";
 "Lock position" = "Закрепить положение";
 "Reset Position" = "Сбросить положение";
-"The widget stays on the desktop, below app windows, on every Space." = "Виджет лежит на рабочем столе под окнами приложений и виден на всех Spaces.";
+"Drag the widget with the pointer to move it; it then stays where you drop it. Lock the position to prevent accidental moves. The widget lives on the desktop, below app windows, on every Space." = "Виджет можно перетащить курсором, и он останется там, где его отпустили. Чтобы случайно не сдвинуть его, закрепите положение. Виджет лежит на рабочем столе под окнами приложений и виден на всех Spaces.";
 "A lower opacity can make text harder to read on bright wallpapers." = "При низкой непрозрачности текст хуже читается на светлых обоях.";

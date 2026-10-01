@@ -88,9 +88,7 @@ struct DesktopWidgetView: View {
     }
 
     @ViewBuilder private var contextMenu: some View {
-        if settings.widgetPlacement == .free {
-            Toggle("Lock Position", isOn: $settings.widgetLocked)
-        }
+        Toggle("Lock Position", isOn: $settings.widgetLocked)
         Button("Widget Settings…") { actions.openSettings(.widget) }
         Divider()
         Button("Hide Widget") { settings.widgetVisible = false }
